@@ -106,6 +106,19 @@ void rst::rasterizer::draw(pos_buf_id pos_buffer, ind_buf_id ind_buffer, col_buf
 //Screen space rasterization
 void rst::rasterizer::rasterize_triangle(const Triangle& t) {
     auto v = t.toVector4();
+
+    float minx = static_cast<float>(width);
+    float miny = static_cast<float>(height);
+    float maxx = 0;
+    float maxy = 0;
+
+    for(const auto& vert : v)
+    {
+        minx = std::min(minx, vert.x());
+        maxx = std::max(maxx, vert.x());
+        miny = std::min(miny, vert.y());
+        maxy = std::max(maxy, vert.y());
+    }
     
     // TODO : Find out the bounding box of current triangle.
     // iterate through the pixel and find if the current pixel is inside the triangle
