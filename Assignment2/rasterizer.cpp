@@ -39,6 +39,11 @@ auto to_vec4(const Eigen::Vector3f& v3, float w = 1.0f)
     return Vector4f(v3.x(), v3.y(), v3.z(), w);
 }
 
+float cross_2(Vector2f a, Vector2f b)
+{
+    return a.y() * b.x() - a.x() * b.y();
+}
+
 static std::tuple<float, float, float> computeBarycentric2D(float x, float y, const Vector3f* v)
 {
     float c1 = (x*(v[1].y() - v[2].y()) + (v[2].x() - v[1].x())*y + v[1].x()*v[2].y() - v[2].x()*v[1].y()) / (v[0].x()*(v[1].y() - v[2].y()) + (v[2].x() - v[1].x())*v[0].y() + v[1].x()*v[2].y() - v[2].x()*v[1].y());
@@ -97,7 +102,8 @@ void rst::rasterizer::draw(pos_buf_id pos_buffer, ind_buf_id ind_buffer, col_buf
 }
 
 //Screen space rasterization
-void rst::rasterizer::rasterize_triangle(const Triangle& t) {
+void rst::rasterizer::rasterize_triangle(const Triangle& t)
+{
     auto v = t.toVector4();
 
     float minx = static_cast<float>(width);
@@ -113,32 +119,62 @@ void rst::rasterizer::rasterize_triangle(const Triangle& t) {
         maxy = std::max(maxy, vert.y());
     }
     
-    int x0 = static_cast<int>(minx);
-    int x1 = static_cast<int>(maxx) + 1;
-    int y0 = static_cast<int>(miny);
-    int y1 = static_cast<int>(maxy) + 1;
+    int x0 = std::max(static_cast<int>(minx), 0);
+    int x1 = std::min(static_cast<int>(maxx) + 1, width - 1);
+    int y0 = std::max(static_cast<int>(miny), 0);
+    int y1 = std::min(static_cast<int>(maxy) + 1, height - 1);
+
+    auto getTriCoord = [](Vector2f p, Vector2f a, Vector2f b, Vector2f c)-> Vector3f
+    {
+        Vector2f V0 = b - a;
+        Vector2f V1 = c - a;
+
+        float s = cross_2(V0, V1);
+        float bc = cross_2(b - p, c - p);
+        float ca = cross_2(c - p, a - p);
+        float ab = cross_2(a - p, b - p);
+
+        return { bc / s, ca / s, ab / s };
+    };
+
+    Vector2f a = t.v[0].head<2>();
+    Vector2f b = t.v[1].head<2>();
+    Vector2f c = t.v[2].head<2>();
+
+    Vector2f offset[4] = { {-1, -1}, {-1, 1}, {1, 1}, {1, -1} };
+    Vector3f inverse_z( 1.0f / t.v[0].z(), 1.0f / t.v[1].z(), 1.0f / t.v[2].z());
     
     for(int x = x0; x <= x1; ++x)
     {
         for(int y = y0; y <= y1; ++y)
         {
-            Vector2f center(x + 0.5f, y + 0.5f);
+            Vector2f center(static_cast<float>(x) + 0.5f, static_cast<float>(y) + 0.5f);
+            Vector3f center_coord = getTriCoord(center, a, b, c);
+            int index = get_index(x, y);
+            float& buffer_z = depth_buf[index];
+            float center_z = 1.0f / center_coord.dot(inverse_z);
             
+            float alpha = 0.0f;
+            for (int i = 0; i < 4; ++i)
+            {
+                Vector2f p = center + offset[i] * 0.25f;
+                Vector3f coord = getTriCoord(p, a, b, c);
+                if (coord.x() >= 0.0f && coord.y() >= 0.0f && coord.z() >= 0.0f)
+                {
+                    float z = 1.0f / coord.dot(inverse_z);
+                    if(z >= buffer_z)
+                        alpha += 0.25f;
+                }
+            }
+            if (alpha > 0)
+            {
+                set_pixel(Vector3f(x, y, 0), t.getColor() * alpha + frame_buf[index] * (1 - alpha));
+            }
+
+            if(center_z >= buffer_z && center_coord.x() >= 0 && center_coord.y() >= 0 && center_coord.z() >= 0)
+                buffer_z = center_z;
         }
     }
-
-    
-    
-    // TODO : Find out the bounding box of current triangle.
-    // iterate through the pixel and find if the current pixel is inside the triangle
-
-    // If so, use the following code to get the interpolated z value.
-    auto[alpha, beta, gamma] = computeBarycentric2D(x, y, t.v);
-    float w_reciprocal = 1.0/(alpha / v[0].w() + beta / v[1].w() + gamma / v[2].w());
-    float z_interpolated = alpha * v[0].z() / v[0].w() + beta * v[1].z() / v[1].w() + gamma * v[2].z() / v[2].w();
-    z_interpolated *= w_reciprocal;
-
-    // TODO : set the current pixel (use the set_pixel function) to the color of the triangle (use getColor function) if it should be painted.
 }
 
 void rst::rasterizer::set_model(const Eigen::Matrix4f& m)
@@ -164,7 +200,7 @@ void rst::rasterizer::clear(rst::Buffers buff)
     }
     if ((buff & rst::Buffers::Depth) == rst::Buffers::Depth)
     {
-        std::fill(depth_buf.begin(), depth_buf.end(), std::numeric_limits<float>::infinity());
+        std::fill(depth_buf.begin(), depth_buf.end(), -std::numeric_limits<float>::infinity());
     }
 }
 
